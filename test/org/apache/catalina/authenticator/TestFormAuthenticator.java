@@ -31,6 +31,7 @@ import org.junit.Test;
 
 import org.apache.catalina.Context;
 import org.apache.catalina.Valve;
+import org.apache.catalina.session.StandardSession;
 import org.apache.catalina.startup.SimpleHttpClient;
 import org.apache.catalina.startup.TesterMapRealm;
 import org.apache.catalina.startup.TesterServlet;
@@ -291,6 +292,43 @@ public class TestFormAuthenticator extends TomcatBaseTest {
 
         Assert.assertTrue(!originalSessionId.equals(newSessionId));
         client.reset();
+    }
+
+
+    @Test
+    public void testSavedRequestUrlNoProtocolRelativeRedirect() {
+        // Request URIs such as //evil.example.com/... must not result in a
+        // protocol relative redirect to another host after authentication
+        doTestSavedRequestURL("//evil.example.com/path", null,
+                "/evil.example.com/path");
+        doTestSavedRequestURL("///evil.example.com/path", null,
+                "/evil.example.com/path");
+        doTestSavedRequestURL("//////evil.example.com", "a=b",
+                "/evil.example.com?a=b");
+        doTestSavedRequestURL("//evil.example.com", "next=//other",
+                "/evil.example.com?next=//other");
+        // Normal URIs must be unchanged
+        doTestSavedRequestURL("/", null, "/");
+        doTestSavedRequestURL("/test/index.jsp", null, "/test/index.jsp");
+        doTestSavedRequestURL("/test/a//b", "x=//y", "/test/a//b?x=//y");
+    }
+
+
+    private void doTestSavedRequestURL(String requestURI, String queryString,
+            String expected) {
+        FormAuthenticator authenticator = new FormAuthenticator();
+        StandardSession session = new StandardSession(null);
+        SavedRequest saved = new SavedRequest();
+        saved.setMethod("GET");
+        saved.setRequestURI(requestURI);
+        saved.setDecodedRequestURI(requestURI);
+        saved.setQueryString(queryString);
+        session.setNote(Constants.FORM_REQUEST_NOTE, saved);
+
+        String result = authenticator.savedRequestURL(session);
+
+        Assert.assertEquals(expected, result);
+        Assert.assertFalse(result, result.startsWith("//"));
     }
 
 
