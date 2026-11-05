@@ -672,6 +672,162 @@ public class TestHttp11InputBuffer extends TomcatBaseTest {
     }
 
 
+    @Test
+    public void testInvalidContentLength01() {
+        doTestInvalidContentLength(false);
+    }
+
+
+    @Test
+    public void testInvalidContentLength02() {
+        doTestInvalidContentLength(true);
+    }
+
+
+    private void doTestInvalidContentLength(boolean rejectIllegalHeaderName) {
+        getTomcatInstance().getConnector().setProperty("rejectIllegalHeaderName", Boolean.toString(rejectIllegalHeaderName));
+
+        String[] request = new String[1];
+        request[0] =
+                "POST /test HTTP/1.1" + SimpleHttpClient.CRLF +
+                "Host: localhost:8080" + SimpleHttpClient.CRLF +
+                "Content-Length: 12\u000734" + SimpleHttpClient.CRLF +
+                "Connection: close" + SimpleHttpClient.CRLF +
+                SimpleHttpClient.CRLF;
+
+        InvalidClient client = new InvalidClient(request);
+
+        client.doRequest();
+        Assert.assertTrue(client.getResponseLine(), client.isResponse400());
+        Assert.assertTrue(client.isResponseBodyOK());
+    }
+
+
+    /**
+     * As testInvalidContentLength01 but the content-length value is made
+     * invalid with a bare CR rather than another control character. That is
+     * handled by a different branch of the header value parsing.
+     */
+    @Test
+    public void testInvalidContentLength03() {
+        doTestInvalidContentLengthBareCr(false);
+    }
+
+
+    /**
+     * As testInvalidContentLength03 but with rejectIllegalHeaderName enabled
+     * (the default).
+     */
+    @Test
+    public void testInvalidContentLength04() {
+        doTestInvalidContentLengthBareCr(true);
+    }
+
+
+    private void doTestInvalidContentLengthBareCr(boolean rejectIllegalHeaderName) {
+        getTomcatInstance().getConnector().setProperty("rejectIllegalHeaderName", Boolean.toString(rejectIllegalHeaderName));
+
+        String[] request = new String[1];
+        request[0] =
+                "POST /test HTTP/1.1" + SimpleHttpClient.CRLF +
+                "Host: localhost:8080" + SimpleHttpClient.CRLF +
+                "Content-Length: 12" + SimpleHttpClient.CR + "34" + SimpleHttpClient.CRLF +
+                "Connection: close" + SimpleHttpClient.CRLF +
+                SimpleHttpClient.CRLF;
+
+        InvalidClient client = new InvalidClient(request);
+
+        client.doRequest();
+        Assert.assertTrue(client.getResponseLine(), client.isResponse400());
+        Assert.assertTrue(client.isResponseBodyOK());
+    }
+
+
+    /**
+     * As testInvalidContentLength03 but the request is split immediately after
+     * the bare CR so more data has to be read before the bare CR can be
+     * identified.
+     */
+    @Test
+    public void testInvalidContentLength05() {
+        getTomcatInstance().getConnector().setProperty("rejectIllegalHeaderName", "false");
+
+        String[] request = new String[2];
+        request[0] =
+                "POST /test HTTP/1.1" + SimpleHttpClient.CRLF +
+                "Host: localhost:8080" + SimpleHttpClient.CRLF +
+                "Content-Length: 12" + SimpleHttpClient.CR;
+        request[1] =
+                "34" + SimpleHttpClient.CRLF +
+                "Connection: close" + SimpleHttpClient.CRLF +
+                SimpleHttpClient.CRLF;
+
+        InvalidClient client = new InvalidClient(request);
+
+        client.doRequest();
+        Assert.assertTrue(client.getResponseLine(), client.isResponse400());
+        Assert.assertTrue(client.isResponseBodyOK());
+    }
+
+
+    /**
+     * As testInvalidContentLength03 but the request is split after the
+     * invalid content-length value has been identified and before the end of
+     * that header line so more data has to be read before the request is
+     * rejected.
+     */
+    @Test
+    public void testInvalidContentLength06() {
+        getTomcatInstance().getConnector().setProperty("rejectIllegalHeaderName", "false");
+
+        String[] request = new String[2];
+        request[0] =
+                "POST /test HTTP/1.1" + SimpleHttpClient.CRLF +
+                "Host: localhost:8080" + SimpleHttpClient.CRLF +
+                "Content-Length: 12" + SimpleHttpClient.CR + "3";
+        request[1] =
+                "4" + SimpleHttpClient.CRLF +
+                "Connection: close" + SimpleHttpClient.CRLF +
+                SimpleHttpClient.CRLF;
+
+        InvalidClient client = new InvalidClient(request);
+
+        client.doRequest();
+        Assert.assertTrue(client.getResponseLine(), client.isResponse400());
+        Assert.assertTrue(client.isResponseBodyOK());
+    }
+
+
+    /**
+     * The rejection of malformed content-length headers does not change the
+     * handling of other headers with a bare CR in the value.
+     */
+    @Test
+    public void testBareCrInOtherHeaderValue() {
+        Bug51557Client client = new Bug51557Client("X-Bug51557Cr",
+                "foo" + SimpleHttpClient.CR + "bar", true);
+
+        client.doRequest();
+        Assert.assertTrue(client.getResponseLine(), client.isResponse200());
+        Assert.assertTrue(client.isResponseBodyOK());
+    }
+
+
+    /**
+     * The rejection of malformed content-length headers does not change the
+     * handling of other headers with a control character in the value.
+     */
+    @Test
+    public void testControlCharInOtherHeaderValue() {
+        Bug51557Client client = new Bug51557Client("X-Bug51557Ctl",
+                "foo\u0007bar", true);
+
+        client.doRequest();
+        Assert.assertTrue(client.getResponseLine(), client.isResponse200());
+        Assert.assertTrue(client.isResponseBodyOK());
+    }
+
+
     /**
      * Invalid request test client.
      */

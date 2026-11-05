@@ -829,7 +829,7 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                 headerData.lastSignificantChar = pos;
                 byteBuffer.position(byteBuffer.position() - 1);
                 // skipLine() will handle the error
-                return skipLine();
+                return skipLine(false);
             }
 
             // chr is next byte of header name. Convert to lowercase.
@@ -840,7 +840,7 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
 
         // Skip the line and ignore the header
         if (headerParsePos == HeaderParsePosition.HEADER_SKIPLINE) {
-            return skipLine();
+            return skipLine(false);
         }
 
         //
@@ -884,11 +884,27 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                         }
                     }
 
+                    int pos = byteBuffer.position();
                     chr = byteBuffer.get();
                     if (chr == Constants.CR) {
                         // Skip
                     } else if (chr == Constants.LF) {
                         eol = true;
+                    } else if ((byteBuffer.get(pos - 1) == Constants.CR ||
+                            (chr != Constants.HT && HttpParser.isControl(chr))) &&
+                            headers.getName(headers.size() - 1).equalsIgnoreCase("content-length")) {
+                        // Invalid value - a bare CR (one not followed by LF)
+                        // or a control character.
+                        // The previous byte is read from the buffer, rather
+                        // than tracked in a local variable, so a bare CR is
+                        // still detected if more data had to be read after the
+                        // CR. The buffer is not shifted while the headers are
+                        // parsed and the value compaction never writes a CR,
+                        // nor beyond the byte just read.
+                        // Malformed content-length headers must always be
+                        // rejected regardless of rejectIllegalHeaderName
+                        // RFC 9112, section 6.3, bullet 5.
+                        return skipLine(true);
                     } else if (chr == Constants.SP || chr == Constants.HT) {
                         byteBuffer.put(headerData.realPos, chr);
                         headerData.realPos++;
@@ -936,7 +952,17 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
     }
 
 
-    private HeaderParseStatus skipLine() throws IOException {
+    private HeaderParseStatus skipLine(boolean rejectHeader) throws IOException {
+        if (rejectHeader) {
+            // This header must be rejected even if rejectIllegalHeaderName is
+            // disabled. Record that so the decision is not lost if more data
+            // has to be read before the end of the line is reached.
+            headerData.rejectHeader = true;
+        }
+        boolean rejectThisHeader = rejectIllegalHeaderName || headerData.rejectHeader;
+
+        // Parse the rest of the invalid header so we can construct a useful
+        // exception and/or debug message.
         headerParsePos = HeaderParsePosition.HEADER_SKIPLINE;
         boolean eol = false;
 
@@ -960,12 +986,12 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
                 headerData.lastSignificantChar = pos;
             }
         }
-        if (rejectIllegalHeaderName || log.isDebugEnabled()) {
+        if (rejectThisHeader || log.isDebugEnabled()) {
             String message = sm.getString("iib.invalidheader",
                     new String(byteBuffer.array(), headerData.start,
                             headerData.lastSignificantChar - headerData.start + 1,
                             StandardCharsets.ISO_8859_1));
-            if (rejectIllegalHeaderName) {
+            if (rejectThisHeader) {
                 throw new IllegalArgumentException(message);
             }
             log.debug(message);
@@ -1051,11 +1077,19 @@ public class Http11InputBuffer implements InputBuffer, ApplicationBufferHandler 
          * header name and is created after the name has been parsed.
          */
         MessageBytes headerValue = null;
+        /**
+         * When skipping broken header line: {@code true} if the request must
+         * be rejected regardless of rejectIllegalHeaderName (e.g. a malformed
+         * content-length header).<br>
+         * Otherwise: not used (stays as false).
+         */
+        boolean rejectHeader = false;
         public void recycle() {
             start = 0;
             realPos = 0;
             lastSignificantChar = 0;
             headerValue = null;
+            rejectHeader = false;
         }
     }
 
